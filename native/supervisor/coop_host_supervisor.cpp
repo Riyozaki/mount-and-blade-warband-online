@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -252,7 +253,7 @@ bool run_relay_roundtrip_selftest() {
     getsockname(game, reinterpret_cast<sockaddr*>(&loop), &glen);
     uint16_t game_port = ntohs(loop.sin_port);
 
-    calradia::net::UdpMuxRelay relay({{1, game_port}});
+    calradia::net::UdpMuxRelay relay({{0, game_port}, {1, game_port}});
     if (!relay.start(0, false)) return false;
 
     const std::string request = "WARBAND_BATTLE_JOIN";
@@ -285,6 +286,25 @@ bool run_relay_roundtrip_selftest() {
     auto frame = calradia::net::decode_mux_frame(cbuf, static_cast<std::size_t>(cn));
     bool ok = frame.had_mux_header && frame.channel == 1 && frame.session_id == 0xABCD0001u &&
               std::string(frame.payload.begin(), frame.payload.end()) == reply;
+
+    // Round 2: a vanilla client sends a RAW Warband packet (no CO header) -> channel 0 (campaign).
+    // The reply must come back RAW too, so an unmodified game client can read it.
+    const std::string raw_request = "RAW_WARBAND_HELLO";
+    sendto(client, raw_request.data(), static_cast<int>(raw_request.size()), 0,
+           reinterpret_cast<sockaddr*>(&pub), sizeof(pub));
+    if (!relay.pump_once()) ok = false;
+    sockaddr_in relay_side2{};
+    socklen_t rlen2 = sizeof(relay_side2);
+    int gn2 = recvfrom(game, gbuf, sizeof(gbuf), 0, reinterpret_cast<sockaddr*>(&relay_side2), &rlen2);
+    if (!(gn2 == static_cast<int>(raw_request.size()) && std::string(gbuf, gn2) == raw_request)) ok = false;
+    const std::string raw_reply = "RAW_WARBAND_OK";
+    sendto(game, raw_reply.data(), static_cast<int>(raw_reply.size()), 0,
+           reinterpret_cast<sockaddr*>(&relay_side2), sizeof(relay_side2));
+    if (!relay.pump_once()) ok = false;
+    int cn2 = recvfrom(client, reinterpret_cast<char*>(cbuf), sizeof(cbuf), 0, nullptr, nullptr);
+    if (!(cn2 == static_cast<int>(raw_reply.size()) && std::string(reinterpret_cast<char*>(cbuf), cn2) == raw_reply)) {
+        ok = false;
+    }
 
     close_sock(game);
     close_sock(client);
@@ -334,6 +354,29 @@ int main(int argc, char** argv) {
         std::cout << "[OK] Processed " << count << " IPC messages.\n";
         return 0;
     }
+
+    // Live single-port UDP gateway: players connect to public_port only.
+    // Channel 0 -> campaign game listener (public+1); channel 1+slot -> battle slot listener.
+    if (pool_size < 1 || pool_size > 8) {
+        std::cerr << "[CoopHostSupervisor] --pool-size must be between 1 and 8.\n";
+        return 2;
+    }
+    std::map<uint8_t, uint16_t> game_ports;
+    game_ports[0] = calradia::net::channel_to_backend_port(public_port, 0);
+    for (int i = 0; i < pool_size; ++i) {
+        auto ch = static_cast<uint8_t>(i + 1);
+        game_ports[ch] = calradia::net::channel_to_backend_port(public_port, ch);
+    }
+    auto relay = std::make_shared<calradia::net::UdpMuxRelay>(game_ports);
+    if (!relay->start(public_port, true)) {
+        std::cerr << "[CoopHostSupervisor] Cannot bind public UDP port " << public_port
+                  << " (already in use or blocked by firewall).\n";
+        return 2;
+    }
+    std::thread([relay]() {
+        while (relay->pump_once()) {
+        }
+    }).detach();
 
     std::cout << "[CoopHostSupervisor] Listening on public UDP port " << public_port
               << " with " << pool_size << " tactical battle pool slots...\n";

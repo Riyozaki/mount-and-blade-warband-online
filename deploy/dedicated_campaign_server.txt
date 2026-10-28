@@ -1,4 +1,4 @@
-# Calradia Online — WSE2 Dedicated Multiplayer Campaign Server Configuration
+# Calradia Online — WSE2 Dedicated Campaign Server (game listens on 7241 = public mux port 7240 + 1; players never connect here directly)
 set_pass_admin calradia_admin
 set_server_name Calradia_Online_Campaign
 set_welcome_message Welcome_to_Calradia_Online!_Free_Co-op_&_PvP_Sandbox_Campaign.
@@ -10,5 +10,5 @@ set_maps_voteable 0
 set_factions_voteable 0
 set_control_block_direction 1
 set_combat_speed 2
-set_port 7240
+set_port 7241
 start

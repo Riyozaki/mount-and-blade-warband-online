@@ -1,7 +1,6 @@
-# Calradia Online — WSE2 Dedicated Tactical 3D Battle Server Pool Slot Configuration
-# CoopHostSupervisor overrides port (7242 + 2*slot) and scene dynamically per battle!
+# Calradia Online — WSE2 Tactical Battle Server, pool slot 1 (game listens on 7244 = public 7240 + 2 + 2*1)
 set_pass_admin calradia_admin
-set_server_name Calradia_Online_Battle_Instance
+set_server_name Calradia_Online_Battle_Slot1
 set_enable_valve_anti_cheat 0
 set_mission multiplayer_bt
 set_max_players 16 16
@@ -13,5 +12,5 @@ set_ghost_mode 0
 set_control_block_direction 1
 set_combat_speed 2
 set_add_to_game_servers_list 0
-set_port 7242
+set_port 7244
 start

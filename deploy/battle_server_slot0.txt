@@ -1,0 +1,16 @@
+# Calradia Online — WSE2 Tactical Battle Server, pool slot 0 (game listens on 7242 = public 7240 + 2 + 2*0)
+set_pass_admin calradia_admin
+set_server_name Calradia_Online_Battle_Slot0
+set_enable_valve_anti_cheat 0
+set_mission multiplayer_bt
+set_max_players 16 16
+set_friendly_fire 0
+set_melee_friendly_fire 0
+set_friendly_fire_damage_friend_ratio 0
+set_friendly_fire_damage_self_ratio 0
+set_ghost_mode 0
+set_control_block_direction 1
+set_combat_speed 2
+set_add_to_game_servers_list 0
+set_port 7242
+start

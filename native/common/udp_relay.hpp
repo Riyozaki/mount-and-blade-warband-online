@@ -129,6 +129,7 @@ private:
         uint16_t game_port = 0;
         Sock sock = invalid_sock();
         bool has_client = false;
+        bool client_wrapped = false;
         sockaddr_in client{};
         uint32_t session_id = 0;
     };
@@ -197,6 +198,7 @@ private:
             if (r.channel != frame.channel) continue;
             r.client = from;
             r.has_client = true;
+            r.client_wrapped = frame.had_mux_header;
             r.session_id = frame.session_id;
             sockaddr_in game{};
             game.sin_family = AF_INET;
@@ -217,9 +219,15 @@ private:
         int n = ::recvfrom(r.sock, reinterpret_cast<char*>(buf), sizeof(buf), 0,
                            reinterpret_cast<sockaddr*>(&from), &flen);
         if (n <= 0 || !r.has_client) return;
-        auto wrapped = encode_mux_frame(r.channel, r.session_id, buf, static_cast<std::size_t>(n));
-        ::sendto(public_sock_, reinterpret_cast<const char*>(wrapped.data()),
-                 static_cast<int>(wrapped.size()), 0,
+        // Reply in the same format the client used: vanilla (unwrapped) clients get raw Warband packets
+        std::vector<uint8_t> out;
+        if (r.client_wrapped) {
+            out = encode_mux_frame(r.channel, r.session_id, buf, static_cast<std::size_t>(n));
+        } else {
+            out.assign(buf, buf + n);
+        }
+        ::sendto(public_sock_, reinterpret_cast<const char*>(out.data()),
+                 static_cast<int>(out.size()), 0,
                  reinterpret_cast<sockaddr*>(&r.client), sizeof(r.client));
     }
 

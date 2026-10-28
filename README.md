@@ -63,3 +63,17 @@ make package
 - [`docs/network-protocol.md`](./docs/network-protocol.md) — битовая спецификация `CoopUdpMux` и композитных пакетов WSE2 (`110..115`).
 - [`docs/ipc-battle-protocol.md`](./docs/ipc-battle-protocol.md) — протокол бесшовного перехода Карта <-> 3D-битва и живых подкреплений.
 - [`docs/save-format.md`](./docs/save-format.md) — формат двухслойных атомарных сохранений и ротации резервных копий.
+
+## Запуск (Windows, в один щелчок)
+
+Готовый архив `CalradiaOnline-Windows-x64` содержит батники рядом с `calradia_installer.exe`:
+
+1. **Установка / обновление / удаление** — `Install_CalradiaOnline.bat`, `Update_CalradiaOnline.bat`, `Uninstall_CalradiaOnline.bat`. Установщик сам находит папку Warband (Steam, GOG, Standalone) и предупреждает перед удалением сохранений.
+2. **Хост кампании** — `Host_Campaign_Server.bat`: запускает campaign-сервер WSE2, 2 боевых сервера и шлюз `coop_host_supervisor`. Друзьям нужно открыть **только UDP 7240** (или подключиться через VPN).
+3. **Игрок** — `Play_CalradiaOnline.bat`: спрашивает ник, готовит `identity.key` и запускает Warband с модулем `CalradiaOnline`.
+
+Требования: установленный Warband 1.174 и **WSE2** (для серверных `mb_warband_wse2_dedicated*.exe`) в папке игры.
+
+Порты: игрокам виден один публичный порт `7240`; внутренние порты игровых серверов (`7241` кампания, `7242`, `7244`, … боевые слоты) слушают только на локальной машине хоста.
+
+> Статус: батники собраны по схеме запуска родственных WSE2-проектов, но сквозной запуск с двумя ПК ещё **не проверен в игре** — это следующий шаг тестирования.

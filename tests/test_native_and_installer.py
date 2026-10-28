@@ -260,6 +260,33 @@ class TestNativeRuntimeAndInstallerLifecycle(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("[OK] CoopUdpMux relay round-trip self-test passed.", res.stdout)
 
+    def test_08_deploy_configs_and_scripts_match_gateway_ports(self):
+        """
+        Port contract (must match CoopHostSupervisor channel_to_backend_port):
+          public mux 7240 | campaign game 7241 | battle slot i game 7242 + 2*i
+        Also: every file the Windows .bat launchers reference must exist and use CRLF endings.
+        """
+        deploy = os.path.join(REPO_ROOT, "deploy")
+        with open(os.path.join(deploy, "dedicated_campaign_server.txt"), encoding="utf-8") as f:
+            self.assertIn("set_port 7241\n", f.read())
+        for slot in range(4):
+            path = os.path.join(deploy, f"battle_server_slot{slot}.txt")
+            with open(path, encoding="utf-8") as f:
+                self.assertIn(f"set_port {7242 + 2 * slot}\n", f.read(), path)
+
+        scripts = os.path.join(deploy, "scripts")
+        for name in ("Host_Campaign_Server.bat", "Play_CalradiaOnline.bat",
+                     "Install_CalradiaOnline.bat", "Update_CalradiaOnline.bat", "Uninstall_CalradiaOnline.bat"):
+            with open(os.path.join(scripts, name), "rb") as f:
+                raw = f.read()
+            self.assertNotIn(b"\n", raw.replace(b"\r\n", b""), name + " must use CRLF only (no bare LF)")
+            self.assertIn(b"\r\n", raw, name)
+        with open(os.path.join(scripts, "Host_Campaign_Server.bat"), "rb") as f:
+            host = f.read().decode("utf-8")
+        for needed in ("battle_server_slot%%s.txt", "dedicated_campaign_server.txt", "coop_host_supervisor.exe",
+                       "--port %PUBLIC_PORT%", "mb_warband_wse2_dedicated_campaign.exe"):
+            self.assertIn(needed, host)
+
     def test_06_failed_update_leaves_live_install_untouched(self):
         """A bad update package must be rejected BEFORE any live file is removed (build-then-swap)."""
         tmp = tempfile.mkdtemp(prefix="calradia_installer_atomic_")
