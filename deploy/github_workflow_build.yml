@@ -1,0 +1,78 @@
+name: Calradia Online — Build, Lint, Fuzz & Package
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  verify-linux:
+    name: Module System + LuaJIT 2.1 + C++17 + Chaos/Fuzz Suite (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install LuaJIT 2.1 binding (lupa)
+        run: python -m pip install --upgrade pip lupa
+
+      - name: Compile Warband 1.174 + WSE2 Module System
+        run: python module_system/build_module.py
+
+      - name: Compile Native C++17 Runtime & Installer
+        run: make -C native -j4
+
+      - name: Run Full Offline Verification, Bit-Width Lint & Campaign Fuzz Suite
+        env:
+          PYTHONPATH: tests
+        run: python -m unittest discover -s tests -v
+
+  package-windows:
+    name: Build Windows x64 Release Package (.exe Installer + Supervisor + Proxy + Mod)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile Module System (.txt + lua/msfiles)
+        run: python module_system/build_module.py
+
+      - name: Run Static Module System Linter & Bit-Width Symmetry Check on Windows
+        run: python -m unittest tests/test_module_build_and_lint.py -v
+
+      - name: Configure & Build C++17 Windows Executables (MSVC x64)
+        run: |
+          cmake -B build_win -A x64
+          cmake --build build_win --config Release --parallel
+
+      - name: Run Windows Native UDP Multiplexer & Transport Self-Tests
+        run: |
+          .\build_win\Release\coop_host_supervisor.exe --mux-self-test
+          .\build_win\Release\coop_net_proxy.exe --probe-transports
+
+      - name: Assemble Ready-to-Install Windows Distribution Bundle
+        shell: bash
+        run: |
+          mkdir -p dist/CalradiaOnline-Windows-x64/CalradiaOnlinePackage/{export,lua,deploy,bin}
+          cp module_system/export/*.txt dist/CalradiaOnline-Windows-x64/CalradiaOnlinePackage/export/
+          cp -r lua/* dist/CalradiaOnline-Windows-x64/CalradiaOnlinePackage/lua/
+          cp deploy/*.ini deploy/*.txt dist/CalradiaOnline-Windows-x64/CalradiaOnlinePackage/deploy/
+          cp build_win/Release/*.exe dist/CalradiaOnline-Windows-x64/CalradiaOnlinePackage/bin/
+          cp build_win/Release/calradia_installer.exe dist/CalradiaOnline-Windows-x64/
+          cp deploy/scripts/*.bat dist/CalradiaOnline-Windows-x64/
+          cp PROJECT_PLAN.md README.md dist/CalradiaOnline-Windows-x64/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CalradiaOnline-Windows-x64
+          path: dist/CalradiaOnline-Windows-x64

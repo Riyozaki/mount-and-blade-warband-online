@@ -1,0 +1,14 @@
+# Calradia Online — WSE2 Dedicated Multiplayer Campaign Server Configuration
+set_pass_admin calradia_admin
+set_server_name Calradia_Online_Campaign
+set_welcome_message Welcome_to_Calradia_Online!_Free_Co-op_&_PvP_Sandbox_Campaign.
+set_enable_valve_anti_cheat 0
+set_mission multiplayer_bt
+set_max_players 16 16
+set_num_bots_voteable 0
+set_maps_voteable 0
+set_factions_voteable 0
+set_control_block_direction 1
+set_combat_speed 2
+set_port 7240
+start
