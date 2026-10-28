@@ -33,10 +33,19 @@ int main(int argc, char** argv) {
     fs::path cfg_path = mod_dir / "launcher_config.json";
     {
         std::ofstream ofs(cfg_path, std::ios::binary | std::ios::trunc);
+        auto esc = [](const std::string& s) {
+            std::string o;
+            for (char c : s) {
+                if (c == '\\' || c == '"') { o += '\\'; o += c; }
+                else if (c == '\n' || c == '\r') o += ' ';
+                else o += c;
+            }
+            return o;
+        };
         ofs << "{\n"
             << "  \"player_uid\": \"" << id.player_uid << "\",\n"
-            << "  \"nickname\": \"" << nickname << "\",\n"
-            << "  \"last_server\": \"" << server_addr << "\",\n"
+            << "  \"nickname\": \"" << esc(nickname) << "\",\n"
+            << "  \"last_server\": \"" << esc(server_addr) << "\",\n"
             << "  \"host_max_players\": " << max_players << ",\n"
             << "  \"friendly_fire_pct\": " << friendly_fire_pct << ",\n"
             << "  \"speed_policy\": \"" << speed_policy << "\"\n"

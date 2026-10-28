@@ -1,5 +1,6 @@
 #include "installer_core.hpp"
 
+#include <exception>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -67,7 +68,13 @@ int run_interactive_wizard(const fs::path& exe_path) {
 
     calradia::installer::InstallResult res;
     if (choice == "1") {
-        res = calradia::installer::perform_install(warband_dir, pkg_dir, "1.0.0");
+        // Already installed? Treat "install" as a safe clean update so no stale files survive.
+        if (fs::exists(warband_dir / "Modules" / "CalradiaOnline" / "install_manifest.json")) {
+            std::cout << "[i] Mod already present — performing clean update instead.\n";
+            res = calradia::installer::perform_clean_update(warband_dir, pkg_dir, "1.0.0");
+        } else {
+            res = calradia::installer::perform_install(warband_dir, pkg_dir, "1.0.0");
+        }
     } else if (choice == "2") {
         res = calradia::installer::perform_clean_update(warband_dir, pkg_dir, "1.0.0");
     } else if (choice == "3") {
@@ -87,7 +94,9 @@ int run_interactive_wizard(const fs::path& exe_path) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+namespace {
+
+int run_cli(int argc, char** argv) {
     if (argc < 2) {
         return run_interactive_wizard(argc > 0 ? fs::path(argv[0]) : fs::current_path());
     }
@@ -147,7 +156,12 @@ int main(int argc, char** argv) {
 
     calradia::installer::InstallResult res;
     if (cmd == "install") {
-        res = calradia::installer::perform_install(warband_dir, package_dir, version_tag);
+        if (fs::exists(warband_dir / "Modules" / "CalradiaOnline" / "install_manifest.json")) {
+            std::cout << "[i] Mod already present — performing clean update instead.\n";
+            res = calradia::installer::perform_clean_update(warband_dir, package_dir, version_tag);
+        } else {
+            res = calradia::installer::perform_install(warband_dir, package_dir, version_tag);
+        }
     } else if (cmd == "update") {
         res = calradia::installer::perform_clean_update(warband_dir, package_dir, version_tag);
     } else if (cmd == "uninstall") {
@@ -163,4 +177,17 @@ int main(int argc, char** argv) {
     }
     std::cout << "[OK] " << res.message << "\n";
     return 0;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    try {
+        return run_cli(argc, argv);
+    } catch (const std::exception& ex) {
+        // Never crash with an unhandled filesystem exception: report it and keep the console open
+        std::cerr << "[ERROR] " << ex.what() << "\n"
+                  << "Check that the game is closed and that the folder is writable.\n";
+        return 1;
+    }
 }

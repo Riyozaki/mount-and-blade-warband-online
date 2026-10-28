@@ -5,10 +5,12 @@ OUT_DIR  ?= ../build/native
 ifeq ($(OS),Windows_NT)
   LDFLAGS_NET := -lws2_32
   LDFLAGS_DL  :=
+  LDFLAGS_REG := -ladvapi32
   EXE         := .exe
 else
   LDFLAGS_NET := -pthread
   LDFLAGS_DL  := -ldl
+  LDFLAGS_REG :=
   EXE         :=
 endif
 
@@ -37,7 +39,7 @@ $(OUT_DIR)/calradia_launcher$(EXE): launcher/calradia_launcher.cpp common/sha256
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
 $(OUT_DIR)/calradia_installer$(EXE): installer/calradia_installer.cpp installer/installer_core.cpp common/sha256.cpp | $(OUT_DIR)
-	$(CXX) $(CXXFLAGS) $^ -o $@
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS_REG)
 
 clean:
 	rm -rf $(OUT_DIR)

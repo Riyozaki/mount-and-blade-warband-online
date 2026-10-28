@@ -201,5 +201,56 @@ class TestNativeRuntimeAndInstallerLifecycle(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+    def test_05_installer_safety_traversal_guard_and_no_install_over_existing(self):
+        """
+        Verifies:
+        1. A tampered install_manifest.json with '../' entries can NEVER delete files outside Modules/CalradiaOnline.
+        2. 'install' over an existing installation automatically becomes a safe clean update (no stale files).
+        """
+        tmp = tempfile.mkdtemp(prefix="calradia_installer_safety_")
+        try:
+            inst_bin = os.path.join(BIN_DIR, "calradia_installer")
+            wb_dir = os.path.join(tmp, "MountBlade Warband")
+            native_dir = os.path.join(wb_dir, "Modules", "Native")
+            os.makedirs(native_dir, exist_ok=True)
+            with open(os.path.join(wb_dir, "mb_warband.exe"), "wb") as f:
+                f.write(b"MZ_MOCK")
+            with open(os.path.join(native_dir, "module.ini"), "w", encoding="utf-8") as f:
+                f.write("module_name = Native\n")
+
+            pkg = os.path.join(tmp, "pkg")
+            os.makedirs(os.path.join(pkg, "lua"), exist_ok=True)
+            with open(os.path.join(pkg, "lua", "main.lua"), "w", encoding="utf-8") as f:
+                f.write("-- main\n")
+
+            # Outside file that a malicious manifest tries to delete
+            victim = os.path.join(wb_dir, "Modules", "precious_outside.txt")
+            with open(victim, "w", encoding="utf-8") as f:
+                f.write("must survive")
+
+            subprocess.run([inst_bin, "install", "--warband", wb_dir, "--package", pkg, "--version", "1.0.0"],
+                           check=True, capture_output=True, text=True)
+            mod_dir = os.path.join(wb_dir, "Modules", "CalradiaOnline")
+            manifest = os.path.join(mod_dir, "install_manifest.json")
+            with open(manifest, "r", encoding="utf-8") as f:
+                tampered = f.read().replace('"files": [', '"files": [\n    {"path": "../precious_outside.txt", "sha256": "00"},', 1)
+            with open(manifest, "w", encoding="utf-8") as f:
+                f.write(tampered)
+
+            # Uninstall must skip the traversal entry
+            subprocess.run([inst_bin, "uninstall", "--warband", wb_dir], check=True, capture_output=True, text=True)
+            self.assertTrue(os.path.isfile(victim), "traversal entry deleted a file outside the mod folder!")
+
+            # 'install' over an existing (manifest-bearing) install must succeed as clean update
+            subprocess.run([inst_bin, "install", "--warband", wb_dir, "--package", pkg, "--version", "1.0.0"],
+                           check=True, capture_output=True, text=True)
+            res = subprocess.run([inst_bin, "install", "--warband", wb_dir, "--package", pkg, "--version", "1.0.1"],
+                                 capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertIn("clean update", res.stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

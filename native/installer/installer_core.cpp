@@ -46,13 +46,31 @@ const std::set<std::string> PROTECTED_USER_PREFIXES = {
     "launcher_config.json",
 };
 
+// Protected user state: exact files (identity.key, launcher_config.json) and the whole saves/ directory.
 bool is_protected_user_path(const std::string& rel_generic) {
     for (const auto& pref : PROTECTED_USER_PREFIXES) {
-        if (rel_generic == pref || rel_generic.rfind(pref, 0) == 0) {
+        if (!pref.empty() && pref.back() == '/') {
+            if (rel_generic.rfind(pref, 0) == 0) return true;
+        } else if (rel_generic == pref) {
             return true;
         }
     }
     return false;
+}
+
+// Manifest entries are read from disk: refuse anything that could escape Modules/CalradiaOnline.
+bool is_safe_relative_path(const std::string& rel_generic) {
+    if (rel_generic.empty() || rel_generic.front() == '/' || rel_generic.find(':') != std::string::npos) {
+        return false;
+    }
+    std::size_t start = 0;
+    while (start <= rel_generic.size()) {
+        std::size_t end = rel_generic.find('/', start);
+        if (end == std::string::npos) end = rel_generic.size();
+        if (rel_generic.substr(start, end - start) == "..") return false;
+        start = end + 1;
+    }
+    return true;
 }
 
 std::string json_escape(const std::string& s) {
@@ -281,7 +299,7 @@ std::vector<ManifestEntry> read_manifest(const fs::path& manifest_path) {
     std::regex entry_re("\"path\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"sha256\"\\s*:\\s*\"([0-9a-fA-F]+)\"");
     while (std::getline(ifs, line)) {
         std::smatch m;
-        if (std::regex_search(line, m, entry_re)) {
+        if (std::regex_search(line, m, entry_re) && is_safe_relative_path(m[1].str())) {
             entries.push_back({m[1].str(), m[2].str()});
         }
     }
@@ -302,6 +320,10 @@ InstallResult perform_install(
     }
     if (!fs::exists(package_dir)) {
         res.message = "Package directory does not exist: " + package_dir.string();
+        return res;
+    }
+    if (fs::exists(res.module_dir / MANIFEST_FILE)) {
+        res.message = "CalradiaOnline is already installed. Use the clean update instead (it removes old files safely).";
         return res;
     }
 
@@ -393,7 +415,7 @@ InstallResult perform_clean_update(
     if (fs::exists(manifest_path)) {
         auto old_entries = read_manifest(manifest_path);
         for (const auto& item : old_entries) {
-            if (!is_protected_user_path(item.rel_path)) {
+            if (!is_protected_user_path(item.rel_path) && is_safe_relative_path(item.rel_path)) {
                 fs::path p = res.module_dir / item.rel_path;
                 if (fs::exists(p, ec) && fs::remove(p, ec)) {
                     ++removed_count;
@@ -462,6 +484,8 @@ InstallResult perform_uninstall(const fs::path& warband_root, bool keep_saves) {
     std::size_t removed_count = 0;
     auto entries = read_manifest(res.module_dir / MANIFEST_FILE);
     for (const auto& e : entries) {
+        if (!is_safe_relative_path(e.rel_path)) continue;
+        if (keep_saves && is_protected_user_path(e.rel_path)) continue;
         fs::path target = res.module_dir / e.rel_path;
         if (fs::exists(target, ec) && fs::remove(target, ec)) {
             ++removed_count;
