@@ -58,6 +58,7 @@ jobs:
       - name: Run Windows Native UDP Multiplexer & Transport Self-Tests
         run: |
           .\build_win\Release\coop_host_supervisor.exe --mux-self-test
+          .\build_win\Release\coop_host_supervisor.exe --relay-self-test
           .\build_win\Release\coop_net_proxy.exe --probe-transports
 
       - name: Assemble Ready-to-Install Windows Distribution Bundle
