@@ -52,7 +52,8 @@ class TestNativeRuntimeAndInstallerLifecycle(unittest.TestCase):
 
             # Verify Standalone/GOG Steam-free transport probe succeeds without steam_api
             probe = subprocess.run([proxy_bin, "--probe-transports"], capture_output=True, text=True, check=True)
-            self.assertIn("direct_ip,lan,vpn,relay", probe.stdout)
+            self.assertIn("transports=direct_ip\n", probe.stdout)
+            self.assertIn("relay=not_implemented", probe.stdout)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -248,6 +249,49 @@ class TestNativeRuntimeAndInstallerLifecycle(unittest.TestCase):
                                  capture_output=True, text=True)
             self.assertEqual(res.returncode, 0, res.stderr)
             self.assertIn("clean update", res.stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+    def test_07_udp_mux_relay_roundtrip_through_supervisor(self):
+        """Real loopback round trip: CO-framed client packet -> relay -> game listener -> wrapped reply."""
+        sup_bin = os.path.join(BIN_DIR, "coop_host_supervisor")
+        res = subprocess.run([sup_bin, "--relay-self-test"], capture_output=True, text=True, check=False)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("[OK] CoopUdpMux relay round-trip self-test passed.", res.stdout)
+
+    def test_06_failed_update_leaves_live_install_untouched(self):
+        """A bad update package must be rejected BEFORE any live file is removed (build-then-swap)."""
+        tmp = tempfile.mkdtemp(prefix="calradia_installer_atomic_")
+        try:
+            inst_bin = os.path.join(BIN_DIR, "calradia_installer")
+            wb_dir = os.path.join(tmp, "MountBlade Warband")
+            native_dir = os.path.join(wb_dir, "Modules", "Native")
+            os.makedirs(native_dir, exist_ok=True)
+            with open(os.path.join(wb_dir, "mb_warband.exe"), "wb") as f:
+                f.write(b"MZ_MOCK")
+            with open(os.path.join(native_dir, "module.ini"), "w", encoding="utf-8") as f:
+                f.write("module_name = Native\n")
+
+            pkg = os.path.join(tmp, "pkg")
+            os.makedirs(os.path.join(pkg, "lua"), exist_ok=True)
+            with open(os.path.join(pkg, "lua", "main.lua"), "w", encoding="utf-8") as f:
+                f.write("-- v1\n")
+            subprocess.run([inst_bin, "install", "--warband", wb_dir, "--package", pkg, "--version", "1.0.0"],
+                           check=True, capture_output=True, text=True)
+            mod_dir = os.path.join(wb_dir, "Modules", "CalradiaOnline")
+            save = os.path.join(mod_dir, "saves", "world.json")
+            os.makedirs(os.path.dirname(save), exist_ok=True)
+            with open(save, "w", encoding="utf-8") as f:
+                f.write('{"progress": 1}')
+
+            res = subprocess.run([inst_bin, "update", "--warband", wb_dir,
+                                  "--package", os.path.join(tmp, "does_not_exist"), "--version", "2.0.0"],
+                                 capture_output=True, text=True)
+            self.assertNotEqual(res.returncode, 0)
+            self.assertTrue(os.path.isfile(os.path.join(mod_dir, "lua", "main.lua")))
+            self.assertTrue(os.path.isfile(save))
+            self.assertFalse(os.path.exists(os.path.join(wb_dir, "Modules", ".CalradiaOnline_staging")))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

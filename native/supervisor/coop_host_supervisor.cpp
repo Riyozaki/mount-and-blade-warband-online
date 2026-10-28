@@ -1,5 +1,6 @@
 #include "../common/sha256.hpp"
 #include "../common/udp_mux.hpp"
+#include "../common/udp_relay.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -228,12 +229,77 @@ private:
 
 } // namespace
 
+namespace {
+
+// Real round trip through UdpMuxRelay on loopback:
+//   client --(CO ch=1 header)--> relay public port --(bare payload)--> game listener
+//   game listener --(reply)--> relay --(CO ch=1 header)--> client
+bool run_relay_roundtrip_selftest() {
+#ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+    SOCKET game = socket(AF_INET, SOCK_DGRAM, 0);
+    SOCKET client = socket(AF_INET, SOCK_DGRAM, 0);
+    if (game == INVALID_SOCKET || client == INVALID_SOCKET) return false;
+
+    sockaddr_in loop{};
+    loop.sin_family = AF_INET;
+    loop.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    loop.sin_port = htons(0);
+    if (bind(game, reinterpret_cast<sockaddr*>(&loop), sizeof(loop)) != 0) return false;
+    socklen_t glen = sizeof(loop);
+    getsockname(game, reinterpret_cast<sockaddr*>(&loop), &glen);
+    uint16_t game_port = ntohs(loop.sin_port);
+
+    calradia::net::UdpMuxRelay relay({{1, game_port}});
+    if (!relay.start(0, false)) return false;
+
+    const std::string request = "WARBAND_BATTLE_JOIN";
+    auto framed = calradia::net::encode_mux_frame(1, 0xABCD0001u,
+        reinterpret_cast<const uint8_t*>(request.data()), request.size());
+    sockaddr_in pub{};
+    pub.sin_family = AF_INET;
+    pub.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    pub.sin_port = htons(relay.public_port());
+    sendto(client, reinterpret_cast<const char*>(framed.data()), static_cast<int>(framed.size()), 0,
+           reinterpret_cast<sockaddr*>(&pub), sizeof(pub));
+
+    // Step 1: relay forwards the client datagram to the game listener
+    if (!relay.pump_once()) return false;
+    char gbuf[256];
+    sockaddr_in relay_side{};
+    socklen_t rlen = sizeof(relay_side);
+    int gn = recvfrom(game, gbuf, sizeof(gbuf), 0, reinterpret_cast<sockaddr*>(&relay_side), &rlen);
+    if (gn != static_cast<int>(request.size()) || std::string(gbuf, gn) != request) return false;
+
+    // Step 2: game replies to the relay's channel socket; relay wraps it with the CO header
+    const std::string reply = "BATTLE_ACK_OK";
+    sendto(game, reply.data(), static_cast<int>(reply.size()), 0,
+           reinterpret_cast<sockaddr*>(&relay_side), sizeof(relay_side));
+    if (!relay.pump_once()) return false;
+
+    uint8_t cbuf[256];
+    int cn = recvfrom(client, reinterpret_cast<char*>(cbuf), sizeof(cbuf), 0, nullptr, nullptr);
+    if (cn <= 0) return false;
+    auto frame = calradia::net::decode_mux_frame(cbuf, static_cast<std::size_t>(cn));
+    bool ok = frame.had_mux_header && frame.channel == 1 && frame.session_id == 0xABCD0001u &&
+              std::string(frame.payload.begin(), frame.payload.end()) == reply;
+
+    close_sock(game);
+    close_sock(client);
+    return ok;
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
     uint16_t public_port = 7240;
     int pool_size = 4;
     fs::path spool_dir = "saves/ipc";
     bool once = false;
     bool selftest = false;
+    bool relay_selftest = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -242,8 +308,17 @@ int main(int argc, char** argv) {
         else if (arg == "--spool-dir" && i + 1 < argc) spool_dir = argv[++i];
         else if (arg == "--process-ipc-once") once = true;
         else if (arg == "--mux-self-test") selftest = true;
+        else if (arg == "--relay-self-test") relay_selftest = true;
     }
 
+    if (relay_selftest) {
+        if (!run_relay_roundtrip_selftest()) {
+            std::cerr << "[FAIL] CoopUdpMux relay round-trip self-test failed.\n";
+            return 1;
+        }
+        std::cout << "[OK] CoopUdpMux relay round-trip self-test passed.\n";
+        return 0;
+    }
     if (selftest) {
         if (!HostSupervisor::run_udp_mux_loopback_selftest()) {
             std::cerr << "[FAIL] CoopUdpMux loopback self-test failed.\n";

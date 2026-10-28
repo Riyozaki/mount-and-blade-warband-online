@@ -60,7 +60,14 @@ int main(int argc, char** argv) {
 
     if (probe_mode) {
         bool has_steam = probe_optional_steam_runtime();
-        std::cout << "transports=direct_ip,lan,vpn,relay" << (has_steam ? ",steam_p2p" : "") << "\n";
+        // Honest capability report: only what is really implemented is advertised.
+        // direct_ip covers LAN and VPN (they are plain IP addresses through the same UDP mux path).
+        // relay and steam_p2p are NOT implemented yet; the Steam runtime is only detected, never used.
+        std::cout << "transports=direct_ip\n"
+                  << "lan_vpn_via=direct_ip\n"
+                  << "relay=not_implemented\n"
+                  << "steam_p2p=not_implemented\n"
+                  << "steam_runtime=" << (has_steam ? "present" : "absent") << "\n";
         return 0;
     }
 

@@ -78,6 +78,14 @@ int run_interactive_wizard(const fs::path& exe_path) {
     } else if (choice == "2") {
         res = calradia::installer::perform_clean_update(warband_dir, pkg_dir, "1.0.0");
     } else if (choice == "3") {
+        std::cout << "\nThis deletes ALL CalradiaOnline data, INCLUDING campaign saves and identity.key.\n"
+                  << "Type DELETE to confirm: ";
+        std::string confirm;
+        std::getline(std::cin, confirm);
+        if (confirm != "DELETE") {
+            std::cout << "Cancelled. Nothing was removed.\n";
+            return 0;
+        }
         res = calradia::installer::perform_uninstall(warband_dir, false);
     } else if (choice == "4") {
         res = calradia::installer::perform_uninstall(warband_dir, true);

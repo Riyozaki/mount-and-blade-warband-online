@@ -306,6 +306,70 @@ std::vector<ManifestEntry> read_manifest(const fs::path& manifest_path) {
     return entries;
 }
 
+namespace {
+
+// Builds a complete CalradiaOnline tree (Native static assets + package overlay + manifest) inside `dst`.
+// Never touches identity.key or saves/: those are user state and live outside the manifest.
+void build_mod_tree(
+    const fs::path& warband_root,
+    const fs::path& package_dir,
+    const fs::path& dst,
+    const std::string& version_tag) {
+    const fs::path native_dir = warband_root / "Modules" / "Native";
+    fs::create_directories(dst);
+
+    std::vector<ManifestEntry> manifest;
+
+    // 1. Copy base static assets locally from the player's legal Modules/Native folder
+    for (const auto& item : NATIVE_STATIC_ASSETS) {
+        fs::path src = native_dir / item;
+        if (fs::exists(src)) {
+            copy_tree_recorded(src, dst / item, dst, manifest);
+        }
+    }
+
+    // 2. Overlay CalradiaOnline compiled .txt, lua/, deploy configs & runtime helpers from package_dir
+    if (fs::exists(package_dir / "export")) {
+        copy_tree_recorded(package_dir / "export", dst, dst, manifest);
+    }
+    if (fs::exists(package_dir / "lua")) {
+        copy_tree_recorded(package_dir / "lua", dst / "lua", dst, manifest);
+    }
+    if (fs::exists(package_dir / "deploy")) {
+        copy_tree_recorded(package_dir / "deploy", dst, dst, manifest);
+    }
+    if (fs::exists(package_dir / "bin")) {
+        copy_tree_recorded(package_dir / "bin", dst / "bin", dst, manifest);
+    }
+    // Support flat pre-assembled package layout too
+    for (const auto& entry : fs::directory_iterator(package_dir)) {
+        std::string fn = entry.path().filename().string();
+        if (fn == "export" || fn == "lua" || fn == "deploy" || fn == "bin") continue;
+        if (entry.is_regular_file()) {
+            copy_tree_recorded(entry.path(), dst / fn, dst, manifest);
+        }
+    }
+
+    // 3. Write install_manifest.json (the single source of truth for what this version owns)
+    write_manifest(dst / MANIFEST_FILE, version_tag, manifest);
+}
+
+void ensure_identity(const fs::path& module_dir) {
+    // Player's cryptographic identity.key is created once and then preserved across updates
+    crypto::load_or_create_identity_file((module_dir / "identity.key").string());
+}
+
+bool package_is_usable(const fs::path& package_dir, std::string& why) {
+    std::error_code ec;
+    if (!fs::is_directory(package_dir, ec)) {
+        why = "Package directory does not exist: " + package_dir.string();
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
 InstallResult perform_install(
     const fs::path& warband_root,
     const fs::path& package_dir,
@@ -318,8 +382,7 @@ InstallResult perform_install(
         res.message = "Invalid Mount & Blade: Warband directory (missing mb_warband executable or Modules/Native).";
         return res;
     }
-    if (!fs::exists(package_dir)) {
-        res.message = "Package directory does not exist: " + package_dir.string();
+    if (!package_is_usable(package_dir, res.message)) {
         return res;
     }
     if (fs::exists(res.module_dir / MANIFEST_FILE)) {
@@ -327,56 +390,23 @@ InstallResult perform_install(
         return res;
     }
 
-    fs::path native_dir = warband_root / "Modules" / "Native";
-    fs::create_directories(res.module_dir);
+    build_mod_tree(warband_root, package_dir, res.module_dir, version_tag);
     fs::create_directories(res.module_dir / "saves");
     fs::create_directories(res.module_dir / "logs");
-
-    std::vector<ManifestEntry> manifest;
-
-    // 1. Copy base static assets locally from player's legal Modules/Native folder
-    for (const auto& item : NATIVE_STATIC_ASSETS) {
-        fs::path src = native_dir / item;
-        fs::path dst = res.module_dir / item;
-        if (fs::exists(src)) {
-            copy_tree_recorded(src, dst, res.module_dir, manifest);
-        }
-    }
-
-    // 2. Overlay CalradiaOnline compiled .txt, lua/, deploy configs & runtime helpers from package_dir
-    if (fs::exists(package_dir / "export")) {
-        copy_tree_recorded(package_dir / "export", res.module_dir, res.module_dir, manifest);
-    }
-    if (fs::exists(package_dir / "lua")) {
-        copy_tree_recorded(package_dir / "lua", res.module_dir / "lua", res.module_dir, manifest);
-    }
-    if (fs::exists(package_dir / "deploy")) {
-        copy_tree_recorded(package_dir / "deploy", res.module_dir, res.module_dir, manifest);
-    }
-    if (fs::exists(package_dir / "bin")) {
-        copy_tree_recorded(package_dir / "bin", res.module_dir / "bin", res.module_dir, manifest);
-    }
-    // Support flat pre-assembled package layout too
-    for (const auto& entry : fs::directory_iterator(package_dir)) {
-        std::string fn = entry.path().filename().string();
-        if (fn == "export" || fn == "lua" || fn == "deploy" || fn == "bin") continue;
-        if (entry.is_regular_file()) {
-            copy_tree_recorded(entry.path(), res.module_dir / fn, res.module_dir, manifest);
-        }
-    }
-
-    // 3. Ensure player's cryptographic identity.key exists (preserved across updates!)
-    crypto::load_or_create_identity_file((res.module_dir / "identity.key").string());
-
-    // 4. Write install_manifest.json
-    write_manifest(res.module_dir / MANIFEST_FILE, version_tag, manifest);
+    ensure_identity(res.module_dir);
 
     res.ok = true;
-    res.files_installed = manifest.size();
+    res.files_installed = read_manifest(res.module_dir / MANIFEST_FILE).size();
     res.message = "Installed CalradiaOnline v" + version_tag + " successfully.";
     return res;
 }
 
+// Build-then-swap clean update:
+//   1. Build the complete NEW tree in a staging folder. If this fails, the live install is untouched.
+//   2. Back up user state (saves/, identity.key, launcher_config.json) as a safety copy.
+//   3. Remove every file the OLD manifest tracks, plus any untracked leftovers (never user state).
+//   4. Move the staged files into place, then ensure identity.key exists.
+//   5. Delete the backup only after the swap succeeded.
 InstallResult perform_clean_update(
     const fs::path& warband_root,
     const fs::path& new_package_dir,
@@ -389,17 +419,29 @@ InstallResult perform_clean_update(
         res.message = "Invalid Mount & Blade: Warband directory.";
         return res;
     }
-    if (!fs::exists(new_package_dir)) {
-        res.message = "Update package directory not found.";
+    if (!package_is_usable(new_package_dir, res.message)) {
+        res.message = "Update package directory not found: " + new_package_dir.string();
         return res;
     }
 
-    fs::path backup_dir = warband_root / "Modules" / ".CalradiaOnline_update_backup";
+    const fs::path modules_dir = warband_root / "Modules";
+    const fs::path staging_dir = modules_dir / ".CalradiaOnline_staging";
+    const fs::path backup_dir = modules_dir / ".CalradiaOnline_update_backup";
     std::error_code ec;
+
+    // Step 1: stage the new build without touching the live install
+    fs::remove_all(staging_dir, ec);
+    try {
+        build_mod_tree(warband_root, new_package_dir, staging_dir, new_version_tag);
+    } catch (const std::exception& ex) {
+        fs::remove_all(staging_dir, ec);
+        res.message = std::string("Update aborted before changing anything (staging failed): ") + ex.what();
+        return res;
+    }
+
+    // Step 2: safety backup of user state
     fs::remove_all(backup_dir, ec);
     fs::create_directories(backup_dir);
-
-    // Step 1: Backup protected user state (saves/, identity.key, launcher_config.json)
     if (fs::exists(res.module_dir / "saves")) {
         fs::copy(res.module_dir / "saves", backup_dir / "saves", fs::copy_options::recursive, ec);
     }
@@ -409,64 +451,57 @@ InstallResult perform_clean_update(
         }
     }
 
-    // Step 2: Remove 100% of old mod files tracked in install_manifest.json AND any leftover non-user files!
+    // Step 3: remove the old tracked files and any stale leftovers outside user state
     std::size_t removed_count = 0;
-    fs::path manifest_path = res.module_dir / MANIFEST_FILE;
-    if (fs::exists(manifest_path)) {
-        auto old_entries = read_manifest(manifest_path);
-        for (const auto& item : old_entries) {
-            if (!is_protected_user_path(item.rel_path) && is_safe_relative_path(item.rel_path)) {
-                fs::path p = res.module_dir / item.rel_path;
-                if (fs::exists(p, ec) && fs::remove(p, ec)) {
-                    ++removed_count;
-                }
-            }
+    fs::path old_manifest = res.module_dir / MANIFEST_FILE;
+    if (fs::exists(old_manifest)) {
+        for (const auto& item : read_manifest(old_manifest)) {
+            if (is_protected_user_path(item.rel_path)) continue;
+            fs::path p = res.module_dir / item.rel_path;
+            if (fs::exists(p, ec) && fs::remove(p, ec)) ++removed_count;
         }
-        fs::remove(manifest_path, ec);
     }
-
-    // Also sweep any untracked stale script/mod files outside saves/ & identity.key so the directory is 100% clean
     if (fs::exists(res.module_dir)) {
         std::vector<fs::path> stale_files;
         for (const auto& entry : fs::recursive_directory_iterator(res.module_dir)) {
             if (!entry.is_regular_file()) continue;
             std::string rel = fs::relative(entry.path(), res.module_dir).generic_string();
-            if (!is_protected_user_path(rel)) {
-                stale_files.push_back(entry.path());
-            }
+            if (!is_protected_user_path(rel)) stale_files.push_back(entry.path());
         }
         for (const auto& sf : stale_files) {
-            if (fs::remove(sf, ec)) {
-                ++removed_count;
-            }
+            if (fs::remove(sf, ec)) ++removed_count;
         }
         prune_empty_dirs_bottom_up(res.module_dir);
     }
 
-    // Step 3: Perform fresh deterministic install from new_package_dir
-    InstallResult fresh = perform_install(warband_root, new_package_dir, new_version_tag);
-    if (!fresh.ok) {
-        res.message = "Clean update failed during new package installation: " + fresh.message;
+    // Step 4: move the staged tree into place (the staging tree contains no user state)
+    try {
+        for (const auto& entry : fs::recursive_directory_iterator(staging_dir)) {
+            if (!entry.is_regular_file()) continue;
+            fs::path rel = fs::relative(entry.path(), staging_dir);
+            fs::path target = res.module_dir / rel;
+            fs::create_directories(target.parent_path());
+            fs::rename(entry.path(), target);
+        }
+        fs::create_directories(res.module_dir / "saves");
+        fs::create_directories(res.module_dir / "logs");
+        ensure_identity(res.module_dir);
+    } catch (const std::exception& ex) {
+        res.message = std::string("Update failed while installing new files: ") + ex.what() +
+                      ". Your saves and identity.key are safe in " + backup_dir.string();
         return res;
     }
 
-    // Step 4: Restore backed-up user saves & cryptographic identity
-    if (fs::exists(backup_dir / "saves")) {
-        fs::create_directories(res.module_dir / "saves");
-        fs::copy(backup_dir / "saves", res.module_dir / "saves",
-                 fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
-    }
-    for (const char* ufile : {"identity.key", "launcher_config.json"}) {
-        if (fs::exists(backup_dir / ufile)) {
-            fs::copy_file(backup_dir / ufile, res.module_dir / ufile, fs::copy_options::overwrite_existing, ec);
-        }
-    }
+    // Step 5: success — drop the staging leftovers and the backup
+    fs::remove_all(staging_dir, ec);
     fs::remove_all(backup_dir, ec);
 
-    fresh.files_removed_old = removed_count;
-    fresh.message = "Clean update to v" + new_version_tag + " complete (removed " +
-                    std::to_string(removed_count) + " old files, preserved saves & identity.key).";
-    return fresh;
+    res.ok = true;
+    res.files_installed = read_manifest(res.module_dir / MANIFEST_FILE).size();
+    res.files_removed_old = removed_count;
+    res.message = "Clean update to v" + new_version_tag + " complete (removed " +
+                  std::to_string(removed_count) + " old files, preserved saves & identity.key).";
+    return res;
 }
 
 InstallResult perform_uninstall(const fs::path& warband_root, bool keep_saves) {
