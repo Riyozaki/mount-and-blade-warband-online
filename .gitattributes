@@ -1,0 +1,3 @@
+# Windows-скрипты лаунчера: CRLF и байты как есть (PowerShell 5.1 нужен BOM в .ps1)
+launcher/*.bat -text
+launcher/*.ps1 -text
